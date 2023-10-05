@@ -10,6 +10,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 // Authors: Fabian Groh, Lukas Ruppert, Patrick Wieschollek, Hendrik P.A. Lensch
+// 2023/10/5 Hanano: 
+// Added support for loading XBin format dataset.
 
 #ifndef INCLUDE_IO_LOADER_ANN_HPP_
 #define INCLUDE_IO_LOADER_ANN_HPP_
@@ -64,8 +66,41 @@ class XVecsLoader : public Loader<ValueT> {
   }
 };
 
+template <typename ValueT>
+class XBinLoader : public Loader<ValueT>{
+ public:
+  explicit XBinLoader(const std::string& path) : Loader<ValueT>(path) {
+    // the first two int is [n, dimension]
+    this->hnd->read(reinterpret_cast<char*>(&this->num_elements), sizeof(int));
+    this->hnd->read(reinterpret_cast<char*>(&this->dimension), sizeof(int));
+
+    DLOG(INFO) << "Open" << path << " with "<< this->num_elements << " "
+               << this->dimension << "-dim vector.";
+  }
+
+  void load(ValueT *dst, size_t skip, size_t num) override {
+    DLOG(INFO) << "Loading " << num << " vectors starting at " << skip
+               << "...";
+    // skip meta data block
+    this->hnd->seekg(2 * sizeof(int));
+
+    size_t stride = this->dimension * sizeof(ValueT);
+    this->hnd->seekg(stride * skip);
+
+    this->hnd->read(reinterpret_cast<char*>(dst), 
+                    num * this->dimension * sizeof(ValueT));
+    
+    DLOG(INFO) << "Done";
+  }
+
+};
+
 using FVecsLoader = XVecsLoader<float>;
 using IVecsLoader = XVecsLoader<int>;
 using BVecsLoader = XVecsLoader<uint8_t>;
+
+using FBinLoader = XBinLoader<float>;
+using IBinLoader = XBinLoader<int>;
+using BBinLoader = XBinLoader<uint8_t>;
 
 #endif  // INCLUDE_IO_LOADER_ANN_HPP_

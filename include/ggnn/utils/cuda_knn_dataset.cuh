@@ -10,7 +10,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 // Authors: Fabian Groh, Lukas Ruppert, Patrick Wieschollek, Hendrik P.A. Lensch
-//
+// 2023/10/5 Hanano: 
+// Added a constructor with empty parameters, requiring manual import of the dataset.
+// Added support for loading XBin format dataset.
 
 #ifndef INCLUDE_GGNN_UTILS_CUDA_KNN_DATASET_CUH_
 #define INCLUDE_GGNN_UTILS_CUDA_KNN_DATASET_CUH_
@@ -37,6 +39,9 @@ limitations under the License.
  */
 template <typename KeyT, typename BaseT, typename BAddrT>
 struct Dataset {
+  /// dataset file type
+  enum ds_filetype{XVECS, XBIN};
+
   /// dataset vectors
   BaseT* h_base{nullptr};
 
@@ -60,12 +65,17 @@ struct Dataset {
   std::vector<uint8_t> top1DuplicateEnd;
   std::vector<uint8_t> topKDuplicateEnd;
 
+  Dataset(){}
+
   Dataset(const std::string& basePath, const std::string& queryPath,
-          const std::string& gtPath, const size_t N_base = std::numeric_limits<size_t>::max()) {
+          const std::string& gtPath, const size_t N_base = std::numeric_limits<size_t>::max(), 
+          const ds_filetype fileType = ds_filetype::XVECS) {
 
     VLOG(1) << "N_base: " << N_base;
 
-    bool success = loadBase(basePath, 0, N_base) && loadQuery(queryPath) && loadGT(gtPath);
+    bool success = loadBase(basePath, fileType, 0, N_base) &&
+                   loadQuery(queryPath, fileType) && 
+                   loadGT(gtPath, fileType);
 
     if (!success)
       throw std::runtime_error(
@@ -106,19 +116,24 @@ struct Dataset {
   }
 
   /// load base vectors from file
-  bool loadBase(const std::string& base_file, size_t from = 0,
+  bool loadBase(const std::string& base_file, const ds_filetype fileType = ds_filetype::XVECS, size_t from = 0,
                 size_t num = std::numeric_limits<size_t>::max()) {
     freeBase();
-    XVecsLoader<BaseT> base_loader(base_file);
+    std::unique_ptr<Loader<BaseT>> base_loader_p;
+    if(fileType==ds_filetype::XBIN) 
+      base_loader_p.reset(dynamic_cast<Loader<BaseT>*>(new XBinLoader<BaseT>(base_file)));
+    else if(fileType==ds_filetype::XVECS) 
+      base_loader_p.reset(dynamic_cast<Loader<BaseT>*>(new XVecsLoader<BaseT>(base_file)));
 
-    num = std::min(num, base_loader.Num() - from);
+
+    num = std::min(num, base_loader_p->Num() - from);
     CHECK_GT(num, 0) << "The requested range contains no vectors.";
 
     N_base = num;
     if (D == 0) {
-      D = base_loader.Dim();
+      D = base_loader_p->Dim();
     }
-    CHECK_EQ(D, base_loader.Dim()) << "Dimension mismatch";
+    CHECK_EQ(D, base_loader_p->Dim()) << "Dimension mismatch";
 
     const size_t dataset_max_index =
         static_cast<size_t>(N_base) * static_cast<size_t>(D);
@@ -130,18 +145,22 @@ struct Dataset {
 
     CHECK_CUDA(cudaMallocHost(&h_base, base_memsize, cudaHostAllocPortable | cudaHostAllocWriteCombined));
 
-    base_loader.load(h_base, from, num);
+    base_loader_p->load(h_base, from, num);
 
     return true;
   }
 
   /// load query vectors from file
-  bool loadQuery(const std::string& query_file, KeyT from = 0,
+  bool loadQuery(const std::string& query_file, const ds_filetype fileType = ds_filetype::XVECS, KeyT from = 0,
                  KeyT num = std::numeric_limits<KeyT>::max()) {
     freeQuery();
-    XVecsLoader<BaseT> query_loader(query_file);
+    std::unique_ptr<Loader<BaseT>> query_loader_p;
+    if(fileType==ds_filetype::XBIN) 
+      query_loader_p.reset(dynamic_cast<Loader<BaseT>*>(new XBinLoader<BaseT>(query_file)));
+    else if(fileType==ds_filetype::XVECS) 
+      query_loader_p.reset(dynamic_cast<Loader<BaseT>*>(new XVecsLoader<BaseT>(query_file)));
 
-    num = std::min(num, query_loader.Num() - from);
+    num = std::min(num, query_loader_p->Num() - from);
     CHECK_GT(num, 0) << "The requested range contains no vectors.";
 
     if (N_query == 0) {
@@ -150,9 +169,9 @@ struct Dataset {
     CHECK_EQ(N_query, num) << "Number mismatch";
 
     if (D == 0) {
-      D = query_loader.Dim();
+      D = query_loader_p->Dim();
     }
-    CHECK_EQ(D, query_loader.Dim()) << "Dimension mismatch";
+    CHECK_EQ(D, query_loader_p->Dim()) << "Dimension mismatch";
 
     const size_t dataset_max_index =
         static_cast<size_t>(N_query) * static_cast<size_t>(D);
@@ -165,13 +184,13 @@ struct Dataset {
 
     CHECK_CUDA(cudaMallocHost(&h_query, query_memsize, cudaHostAllocPortable));
 
-    query_loader.load(h_query, from, num);
+    query_loader_p->load(h_query, from, num);
 
     return true;
   }
 
   /// load ground truth indices from file
-  bool loadGT(const std::string& gt_file, KeyT from = 0,
+  bool loadGT(const std::string& gt_file, const ds_filetype fileType = ds_filetype::XVECS, KeyT from = 0,
               KeyT num = std::numeric_limits<KeyT>::max()) {
     freeGT();
 
@@ -189,9 +208,13 @@ struct Dataset {
       return true;
     }
 
-    XVecsLoader<KeyT> gt_loader(gt_file);
+    std::unique_ptr<Loader<KeyT>> gt_loader_p;
+    if(fileType==ds_filetype::XBIN) 
+      gt_loader_p.reset(dynamic_cast<Loader<KeyT>*>(new XBinLoader<KeyT>(gt_file)));
+    else if(fileType==ds_filetype::XVECS) 
+      gt_loader_p.reset(dynamic_cast<Loader<KeyT>*>(new XVecsLoader<KeyT>(gt_file)));
 
-    num = std::min(num, gt_loader.Num() - from);
+    num = std::min(num, gt_loader_p->Num() - from);
     CHECK_GT(num, 0) << "The requested range contains no vectors.";
 
     if (N_query == 0) {
@@ -199,7 +222,7 @@ struct Dataset {
     }
     CHECK_EQ(N_query, num) << "Number mismatch";
 
-    K_gt = gt_loader.Dim();
+    K_gt = gt_loader_p->Dim();
 
     const size_t dataset_max_index =
         static_cast<size_t>(N_query) * static_cast<size_t>(K_gt);
@@ -210,7 +233,32 @@ struct Dataset {
     gt = (KeyT*) malloc(static_cast<BAddrT>(N_query) * K_gt * sizeof(KeyT));
     CHECK(gt);
 
-    gt_loader.load(gt, from, num);
+    gt_loader_p->load(gt, from, num);
+    return true;
+  }
+
+  bool importQuery(const std::vector<BaseT>& query_v,
+                   KeyT num = std::numeric_limits<KeyT>::max()) {
+    freeQuery();
+    CHECK_GT(num, 0) << "No requested query vectors.";
+    CHECK_GT(query_v.size() % num, 0) << "Dimension unaligned";
+    if (N_query == 0) N_query = num;
+    CHECK_EQ(N_query, num) << "Number mismatch";
+    if (D == 0) D = query_v.size() / num;
+    CHECK_EQ(D, query_v.size() / num) << "Dimension mismatch";
+    const size_t dataset_max_index =
+        static_cast<size_t>(N_query) * static_cast<size_t>(D);
+    CHECK_LT(dataset_max_index, std::numeric_limits<BAddrT>::max())
+        << "Address type is insufficient to address the requested dataset. "
+           "aborting.";
+
+    const size_t query_memsize =
+        static_cast<BAddrT>(N_query) * D * sizeof(BaseT);
+    CHECK_CUDA(cudaMallocHost(&h_query, query_memsize, cudaHostAllocPortable));
+
+    CHECK_CUDA(cudaMemcpy(h_query, query_v.data(), query_memsize,
+                          cudaMemcpyHostToHost));
+
     return true;
   }
 

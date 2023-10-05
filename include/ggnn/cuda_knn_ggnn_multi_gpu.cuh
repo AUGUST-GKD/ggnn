@@ -103,6 +103,22 @@ struct GGNNMultiGPU {
     CHECK_EQ(dataset.D, D) << "DIM needs to be the same";
   }
 
+  GGNNMultiGPU(const int L, const float tau_build):L{L},tau_build{tau_build}{};
+
+  bool loadBase(const std::string& base_file,
+                const size_t N_base = std::numeric_limits<size_t>::max(),
+                const typename Dataset::ds_filetype ft = Dataset::ds_filetype::XBIN) {
+    return dataset.loadBase(base_file, ft, 0, N_base);
+  }
+
+  bool loadQuery(const std::string& query_file, const typename Dataset::ds_filetype ft) {
+    return dataset.loadQuery(query_file, ft);
+  }
+
+  bool loadGT(const std::string& gt_file, const typename Dataset::ds_filetype ft) {
+    return dataset.loadGT(gt_file, ft);
+  }
+
   void ggnnMain(const std::vector<int>& gpus, const std::string& mode,
                 const int N_shard, const std::string& graph_dir,
                 const int refinement_iterations,
@@ -433,7 +449,8 @@ struct GGNNMultiGPU {
     }
   }
 
-  void query(const float tau_query) {
+  [[maybe_unused]]
+  std::pair<std::vector<KeyT>, std::vector<ValueT>> query(const float tau_query) {
     CHECK(!ggnn_gpu_instances.empty()) << "configure() the multi-GPU setup first!";
 
     dataset.template checkForDuplicatesInGroundTruth<measure, ValueT>(KQuery);
@@ -558,10 +575,21 @@ struct GGNNMultiGPU {
 
     // CPU Zone:
     ggnn_results.merge();
-    ggnn_results.evaluateResults();
+    // skip self evaluation
+    // ggnn_results.evaluateResults();
 
     // process the shards in reverse order during the next query for improved cache utilization
     process_shards_back_to_front = !process_shards_back_to_front;
+
+    // return result [ids, dists] for outside evaluation
+    std::pair<std::vector<KeyT>, std::vector<ValueT>> return_res;
+    return_res.first.resize(static_cast<size_t>(dataset.N_query)*KQuery);
+    return_res.second.resize(static_cast<size_t>(dataset.N_query)*KQuery);
+    memcpy(return_res.first.data(), ggnn_results.h_sorted_ids,
+           sizeof(KeyT) * KQuery * dataset.N_query);
+    memcpy(return_res.second.data(), ggnn_results.h_sorted_dists,
+           sizeof(ValueT) * KQuery * dataset.N_query);
+    return return_res;
   }
 }; // GGNN
 

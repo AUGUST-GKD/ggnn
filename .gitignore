@@ -5,6 +5,7 @@ build_docker/
 build_local/
 .vscode
 data/**
+rsync.sh
 
 include/ggnn/alternatives
 

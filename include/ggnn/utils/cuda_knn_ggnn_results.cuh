@@ -34,6 +34,7 @@ struct GGNNResults {
   ValueT* h_sorted_dists_gpu;
 
   KeyT* h_sorted_ids;
+  ValueT* h_sorted_dists;
 
   const Dataset<KeyT, BaseT, BAddrT>* dataset;
 
@@ -56,12 +57,14 @@ struct GGNNResults {
                               cudaHostAllocPortable));
 
     h_sorted_ids = (KeyT*)malloc(dataset->N_query * KQuery * sizeof(KeyT));
+    h_sorted_dists = (ValueT*)malloc(dataset->N_query * KQuery * sizeof(ValueT));
   }
 
   ~GGNNResults() {
     cudaFreeHost(h_sorted_ids_gpu);
     cudaFreeHost(h_sorted_dists_gpu);
     free(h_sorted_ids);
+    free(h_sorted_dists);
   }
 
   GGNNResults(const GGNNResults&) = delete;
@@ -84,10 +87,12 @@ struct GGNNResults {
     if(num_gpus == 1) {
       if(num_iterations == 1){
        std::copy_n(h_sorted_ids_gpu, num_results_per_gpu, h_sorted_ids);
+       std::copy_n(h_sorted_dists_gpu, num_results_per_gpu, h_sorted_dists);
       }
       else{
         for (int n = 0; n <  dataset->N_query; n++) {
           std::copy_n(h_sorted_ids_gpu + n * KQuery * num_iterations, KQuery, h_sorted_ids + n * KQuery);
+          std::copy_n(h_sorted_dists_gpu + n * KQuery * num_iterations, KQuery, h_sorted_dists + n * KQuery);
         }     
       }
       return;
@@ -131,6 +136,7 @@ struct GGNNResults {
         for (int k = 0; k < KQuery; ++k) {
           const KeyDistPartition top = heap.front();
           h_sorted_ids[n * KQuery + k] = top.partition * N_partition + top.key;
+          h_sorted_dists[n * KQuery + k] = top.partition * N_partition + top.dist;
           if (k == KQuery - 1) break;
 
           std::pop_heap(heap.begin(), heap.end(), compare_heap);
